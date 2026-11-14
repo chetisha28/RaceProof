@@ -1,0 +1,36 @@
+{
+  "name": "raceproof-server",
+  "version": "1.0.0",
+  "description": "Race-condition safe team formation backend",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:reset": "prisma migrate reset --force",
+    "seed": "node prisma/seed.js",
+    "test": "vitest run --testTimeout=30000",
+    "test:watch": "vitest",
+    "test:concurrency": "vitest run tests/concurrency.test.js --testTimeout=60000"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.4.1",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9",
+    "prisma": "^6.4.1",
+    "supertest": "^7.0.0",
+    "vitest": "^3.0.5"
+  }
+}
+

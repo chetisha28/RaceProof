@@ -1,0 +1,149 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum TeamStatus {
+  ACTIVE
+  FULL
+  DISBANDED
+}
+
+enum MemberRole {
+  LEADER
+  MEMBER
+}
+
+enum RequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  bio          String?       @db.Text
+  skills       String[]      @default([])
+  githubUrl    String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  teamsLed     Team[]        @relation("TeamLeader")
+  memberships  TeamMember[]
+  joinRequests JoinRequest[]
+  invites      Invite[]      @relation("InviteCreator")
+  auditLogs    AuditLog[]
+
+  @@index([email])
+}
+
+model Hackathon {
+  id          String        @id @default(uuid())
+  name        String
+  description String        @db.Text
+  startDate   DateTime
+  endDate     DateTime
+  createdAt   DateTime      @default(now())
+
+  teams       Team[]
+  members     TeamMember[]
+}
+
+model Team {
+  id          String        @id @default(uuid())
+  name        String
+  description String        @db.Text
+  hackathonId String
+  leaderId    String
+  maxSize     Int           @default(4)
+  status      TeamStatus    @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  hackathon   Hackathon     @relation(fields: [hackathonId], references: [id], onDelete: Cascade)
+  leader      User          @relation("TeamLeader", fields: [leaderId], references: [id], onDelete: Restrict)
+  members     TeamMember[]
+  joinRequests JoinRequest[]
+  invites     Invite[]
+  auditLogs   AuditLog[]
+
+  @@index([hackathonId])
+  @@index([leaderId])
+  @@index([status])
+}
+
+model TeamMember {
+  id          String     @id @default(uuid())
+  teamId      String
+  hackathonId String
+  userId      String
+  role        MemberRole @default(MEMBER)
+  joinedAt    DateTime   @default(now())
+
+  team        Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  hackathon   Hackathon  @relation(fields: [hackathonId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Critical constraint: a user can belong to only one team per hackathon
+  @@unique([hackathonId, userId], name: "unique_user_per_hackathon")
+  @@unique([teamId, userId], name: "unique_user_per_team")
+  @@index([teamId])
+  @@index([userId])
+}
+
+model JoinRequest {
+  id        String        @id @default(uuid())
+  teamId    String
+  userId    String
+  status    RequestStatus @default(PENDING)
+  message   String?       @db.Text
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  team      Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([teamId, status])
+  @@index([userId, status])
+}
+
+model Invite {
+  id         String    @id @default(uuid())
+  teamId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  createdBy  String
+  createdAt  DateTime  @default(now())
+  usedAt     DateTime?
+
+  team       Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator    User      @relation("InviteCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([tokenHash])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actorId   String?
+  teamId    String?
+  action    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  team      Team?    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
