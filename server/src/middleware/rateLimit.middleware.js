@@ -87,3 +87,24 @@ export const inviteAcceptLimiter = createRateLimiter({
   message: 'Too many invite acceptance attempts. Please wait a moment.',
   code: 'INVITE_ACCEPT_RATE_LIMIT_EXCEEDED',
 });
+
+export const teamCreateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many teams created from this IP. Please wait before creating another team.',
+  code: 'TEAM_CREATE_RATE_LIMIT_EXCEEDED',
+});
+
+export const joinRequestLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  message: 'Too many join requests submitted. Please wait before sending more.',
+  code: 'JOIN_REQUEST_RATE_LIMIT_EXCEEDED',
+});
+
+export const demoLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: 'Demo benchmark rate limit reached. Please wait 1 minute.',
+  code: 'DEMO_RATE_LIMIT_EXCEEDED',
+});

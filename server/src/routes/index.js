@@ -5,6 +5,7 @@ import teamRoutes from './team.routes.js';
 import requestRoutes from './request.routes.js';
 import inviteRoutes from './invite.routes.js';
 import sseRoutes from './sse.routes.js';
+import demoRoutes from './demo.routes.js';
 
 const router = Router();
 
@@ -14,6 +15,7 @@ router.use('/teams', teamRoutes);
 router.use('/requests', requestRoutes);
 router.use('/invites', inviteRoutes);
 router.use('/sse', sseRoutes);
+router.use('/demo', demoRoutes);
 
 export default router;
 

@@ -7,19 +7,25 @@ import { env } from './config/env.js';
 
 const app = express();
 
-// Security and CORS middleware
+// Strict Security and CORS middleware
+// Phase 4A: Exact configured production origin allowlist; localhost allowed only in development
 const configuredOrigins = (env.CLIENT_URL || '')
   .split(',')
   .map((url) => url.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
-const defaultOrigins = [
+const developmentOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
+  'http://localhost:5000',
 ];
 
-const allowedOrigins = new Set([...configuredOrigins, ...defaultOrigins]);
+const allowedOrigins = new Set(
+  env.NODE_ENV === 'production'
+    ? configuredOrigins
+    : [...configuredOrigins, ...developmentOrigins]
+);
 
 app.use(
   cors({
@@ -31,23 +37,21 @@ app.use(
 
       const normalizedOrigin = origin.replace(/\/$/, '');
 
-      // Check configured origins
+      // Check against strict allowedOrigins Set
       if (allowedOrigins.has(normalizedOrigin)) {
         return callback(null, true);
       }
 
-      try {
-        const parsed = new URL(origin);
-        // Allow Vercel production and preview deployments
-        if (parsed.hostname.endsWith('.vercel.app')) {
-          return callback(null, true);
+      // In non-production only, permit localhost ports dynamically
+      if (env.NODE_ENV !== 'production') {
+        try {
+          const parsed = new URL(origin);
+          if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+            return callback(null, true);
+          }
+        } catch {
+          // invalid origin
         }
-        // Allow localhost dev servers
-        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-          return callback(null, true);
-        }
-      } catch {
-        // malformed origin
       }
 
       return callback(new Error(`Origin '${origin}' not allowed by CORS`));

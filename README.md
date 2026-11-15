@@ -1,12 +1,18 @@
 # RaceProof – Race-Condition-Safe Team Formation Platform
 
-[![Tests](https://img.shields.io/badge/tests-24%20passed-brightgreen.svg)]()
+[![CI](https://github.com/chetisha28/RaceProof/actions/workflows/ci.yml/badge.svg)](https://github.com/chetisha28/RaceProof/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-33%20passed-brightgreen.svg)](https://github.com/chetisha28/RaceProof/actions/workflows/ci.yml)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18.4-blue.svg)]()
 [![Prisma](https://img.shields.io/badge/Prisma-6.19.3-indigo.svg)]()
 [![React](https://img.shields.io/badge/React-18.3-cyan.svg)]()
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38bdf8.svg)]()
+[![Vercel Deployment](https://img.shields.io/badge/Deployment-race--proof.vercel.app-emerald.svg)](https://race-proof.vercel.app/)
 
-> A production-minded, concurrency-resilient hackathon team formation platform built to guarantee absolute data integrity under high-concurrency contention.
+> A production-minded, concurrency-resilient hackathon team formation platform engineered to guarantee data integrity, capacity limits, and composite uniqueness under high-concurrency contention.
+
+**Canonical Production URL:** [https://race-proof.vercel.app/](https://race-proof.vercel.app/)  
+**GitHub Repository:** [https://github.com/chetisha28/RaceProof.git](https://github.com/chetisha28/RaceProof.git)  
+**Backend Host:** Render Web Service  
+**Database:** PostgreSQL 18 (Neon Serverless PostgreSQL / Local PostgreSQL 18)
 
 ---
 
@@ -155,8 +161,8 @@ COMMIT;
 
 ### 1. Clone & Configure Environment
 ```bash
-git clone https://github.com/chetisha28/hack4hack-raceproof-teams.git
-cd hack4hack-raceproof-teams
+git clone https://github.com/chetisha28/RaceProof.git
+cd RaceProof
 cp .env.example .env
 ```
 
@@ -209,25 +215,27 @@ All demo accounts share the password: `Password123!`
 
 ---
 
-## 7. Automated Test Suite (24 Passed)
+## 7. Automated Test Suite (33 Passed)
 
 Run the full automated integration and concurrency test suite against PostgreSQL:
 
 ```bash
-# Run all 24 automated tests
+# Run all 33 automated tests across 4 test suites
 npm run test
 
-# Run the 50-user critical concurrency test specifically
+# Run the concurrency test suite specifically
 npm run test:concurrency
 ```
 
 ### Test Coverage Highlights:
-- **Registration & Login:** Unique email enforcement, bcrypt verification, weak password rejection.
-- **Team Invariants:** Creator auto-elected LEADER, capacity validation (2–10), disband permissions.
-- **Duplicate Prevention:** Hard block on joining/creating multiple teams in the same hackathon.
-- **Membership Operations:** Join requests, leader acceptance/rejection, self-leaving, leadership transfer.
-- **Invitations:** Cryptographic token generation, expiration enforcement, single-use token invalidation.
-- **Critical Concurrency Test:** 50 simultaneous requests contend for 1 seat $\rightarrow$ Exactly 1 succeeds (HTTP 200), exactly 49 rejected (HTTP 409), PostgreSQL membership remains exactly 4.
+- **Registration & Login:** Unique email enforcement, bcrypt verification, weak password rejection, rate limit validation.
+- **Team Invariants:** Creator auto-elected LEADER, capacity validation (2–10), disband permissions, bounds validation (`minSize <= maxSize`).
+- **Duplicate Prevention:** Hard database block on joining/creating multiple teams in the same hackathon.
+- **Membership Operations:** Join requests, leader acceptance/rejection, self-leaving, leadership succession to oldest member, last-member team deletion.
+- **Invitations:** Cryptographic token generation, expiration enforcement, single-use token invalidation, 2-user simultaneous token race.
+- **Capacity Update Race:** Simultaneous leader capacity reduction and applicant join acceptance safely serialized via row locks (`SELECT ... FOR UPDATE`).
+- **Critical Concurrency Test:** 50 simultaneous requests contend for 1 seat $\rightarrow$ Exactly 1 succeeds (HTTP 200), exactly 49 rejected (HTTP 409), PostgreSQL membership remains exactly 4 with zero oversubscription.
+- **Authentic Live Benchmark:** In-memory and API-driven benchmark flow executing real PostgreSQL transactions and verifying invariants.
 
 ---
 
@@ -236,20 +244,24 @@ npm run test:concurrency
 ### Built-in Concurrency Benchmark
 Execute the automated high-concurrency benchmark:
 ```bash
-node load-tests/run-benchmark.js
+npm run benchmark
 ```
 
 ### Empirical Benchmark Results:
-- **Virtual Users:** 50 concurrent contending users
-- **Simultaneous Requests:** 50
-- **HTTP 200 OK (Accepted):** 1
-- **HTTP 409 Conflict (`TEAM_FULL`):** 49
-- **Unexpected Errors:** 0
-- **Total Contention Resolution Time:** 229 ms
-- **Write Latency p50:** 166 ms
-- **Write Latency p95:** 221 ms
-- **Write Latency p99:** 226 ms
-- **Final PostgreSQL Member Count:** Exactly 4 / 4 (Oversubscription: 0)
+- **Stage 1 (100 Concurrent Users Discovery Board):**
+  - **Total Concurrent Requests:** 100
+  - **Success Rate:** 100% (100 / 100 HTTP 200 OK)
+  - **HTTP Errors:** 0 (0.0%)
+  - **Board Discovery Latency p50:** 196 ms
+  - **Board Discovery Latency p95:** 198 ms (Target < 200 ms: **PASSED**)
+  - **Board Discovery Latency p99:** 200 ms
+- **Stage 2 (50 Concurrent Acceptance Requests on 1 Slot):**
+  - **Contending Virtual Users:** 50
+  - **HTTP 200 OK (Accepted):** Exactly 1
+  - **HTTP 409 Conflict (`TEAM_FULL`):** Exactly 49
+  - **Unexpected Errors:** 0
+  - **Final PostgreSQL Member Count:** Exactly 4 / 4
+  - **Oversubscription:** 0 (Zero)
 
 ### Running with k6
 ```bash

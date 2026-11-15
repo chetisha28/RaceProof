@@ -202,32 +202,36 @@ export const getTeams = async ({ hackathonId, search, skill, status = 'ACTIVE', 
 
     const skip = (page - 1) * limit;
 
-    const [total, teams] = await Promise.all([
-      prisma.team.count({ where }),
-      prisma.team.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          hackathon: {
-            select: { id: true, name: true },
-          },
-          leader: {
-            select: { id: true, name: true, email: true, timezone: true },
-          },
-          members: {
-            select: {
-              id: true,
-              role: true,
-              user: {
-                select: { id: true, name: true, skills: true },
-              },
+    // Optimized discovery query with privacy protection (no public email leakage)
+    const teams = await prisma.team.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        hackathon: {
+          select: { id: true, name: true },
+        },
+        leader: {
+          select: { id: true, name: true, timezone: true },
+        },
+        members: {
+          select: {
+            id: true,
+            role: true,
+            user: {
+              select: { id: true, name: true, skills: true },
             },
           },
         },
-      }),
-    ]);
+      },
+    });
+
+    // Avoid redundant count query if first page has fewer items than limit
+    let total = teams.length;
+    if (page > 1 || teams.length === limit) {
+      total = await prisma.team.count({ where });
+    }
 
     const formattedTeams = teams.map((team) => {
       const memberCount = team.members.length;
@@ -335,48 +339,95 @@ export const getTeamById = async (teamId, requestingUserId = null) => {
 };
 
 export const updateTeam = async (teamId, userId, data) => {
-  const team = await prisma.team.findUnique({
-    where: { id: teamId },
-    include: { members: true },
-  });
+  // Phase 3B: Pessimistic Row Locking on Team Capacity Updates
+  // Serialized using SELECT ... FOR UPDATE within a transaction
+  const result = await prisma.$transaction(
+    async (tx) => {
+      // 1. Lock the team row
+      const lockedTeams = await tx.$queryRaw`
+        SELECT id, "name", "description", "hackathonId", "leaderId", "minSize", "maxSize", status, "requiredSkills"
+        FROM "Team"
+        WHERE id = ${teamId}
+        FOR UPDATE
+      `;
 
-  if (!team) {
-    throw new AppError('Team not found', 404, 'TEAM_NOT_FOUND');
-  }
+      if (!lockedTeams || lockedTeams.length === 0) {
+        throw new AppError('Team not found', 404, 'TEAM_NOT_FOUND');
+      }
 
-  if (team.leaderId !== userId) {
-    throw new AppError('Only the team leader can update team settings', 403, 'FORBIDDEN_NOT_LEADER');
-  }
+      const team = lockedTeams[0];
 
-  const newMinSize = data.minSize !== undefined ? data.minSize : team.minSize;
-  const newMaxSize = data.maxSize !== undefined ? data.maxSize : team.maxSize;
+      if (team.status === 'DISBANDED') {
+        throw new AppError('Cannot update settings of a disbanded team', 400, 'TEAM_DISBANDED');
+      }
 
-  if (newMinSize > newMaxSize) {
-    throw new AppError('minSize cannot exceed maxSize', 400, 'INVALID_CAPACITY_BOUNDS');
-  }
+      if (team.leaderId !== userId) {
+        throw new AppError('Only the team leader can update team settings', 403, 'FORBIDDEN_NOT_LEADER');
+      }
 
-  if (data.maxSize !== undefined && data.maxSize < team.members.length) {
-    throw new AppError(
-      `Cannot reduce maximum size to ${data.maxSize} because the team already has ${team.members.length} members`,
-      400,
-      'CAPACITY_LESS_THAN_MEMBERS'
-    );
-  }
+      // 2. Count current active members inside the lock
+      const currentMemberCount = await tx.teamMember.count({
+        where: { teamId },
+      });
 
-  const updated = await prisma.team.update({
-    where: { id: teamId },
-    data: {
-      ...(data.name && { name: data.name.trim() }),
-      ...(data.description && { description: data.description.trim() }),
-      ...(data.minSize !== undefined && { minSize: data.minSize }),
-      ...(data.maxSize !== undefined && { maxSize: data.maxSize }),
-      ...(data.requiredSkills !== undefined && { requiredSkills: data.requiredSkills }),
+      const newMinSize = data.minSize !== undefined ? data.minSize : team.minSize;
+      const newMaxSize = data.maxSize !== undefined ? data.maxSize : team.maxSize;
+
+      if (newMinSize > newMaxSize) {
+        throw new AppError('minSize cannot exceed maxSize', 400, 'INVALID_CAPACITY_BOUNDS');
+      }
+
+      if (data.maxSize !== undefined && data.maxSize < currentMemberCount) {
+        throw new AppError(
+          `Cannot reduce maximum size to ${data.maxSize} because the team already has ${currentMemberCount} members`,
+          400,
+          'CAPACITY_LESS_THAN_MEMBERS'
+        );
+      }
+
+      // 3. Update status to FULL if members reached newMaxSize, or ACTIVE if open
+      let newStatus = team.status;
+      if (currentMemberCount >= newMaxSize) {
+        newStatus = 'FULL';
+      } else if (team.status === 'FULL' && currentMemberCount < newMaxSize) {
+        newStatus = 'ACTIVE';
+      }
+
+      const updated = await tx.team.update({
+        where: { id: teamId },
+        data: {
+          ...(data.name && { name: data.name.trim() }),
+          ...(data.description !== undefined && { description: data.description.trim() }),
+          ...(data.minSize !== undefined && { minSize: data.minSize }),
+          ...(data.maxSize !== undefined && { maxSize: data.maxSize }),
+          ...(data.requiredSkills !== undefined && { requiredSkills: data.requiredSkills }),
+          status: newStatus,
+        },
+      });
+
+      // 4. Create Audit Log inside transaction
+      await createAuditLog(tx, {
+        actorId: userId,
+        teamId,
+        action: 'TEAM_UPDATED',
+        metadata: {
+          previousMinSize: team.minSize,
+          previousMaxSize: team.maxSize,
+          newMinSize,
+          newMaxSize,
+          memberCountAtUpdate: currentMemberCount,
+          changes: data,
+        },
+      });
+
+      return updated;
     },
-  });
+    { timeout: 15000 }
+  );
 
   eventEmitter.emit(DOMAIN_EVENTS.TEAM_UPDATED, { teamId, changes: data });
 
-  return updated;
+  return result;
 };
 
 export const disbandTeam = async (teamId, userId) => {
@@ -463,24 +514,66 @@ export const getTeamSuggestions = async (teamId, limit = 10) => {
   });
   const busyUserIds = new Set(busyUserMemberships.map((m) => m.userId));
 
-  // Also exclude users with pending join requests to this team? They can still be recommended or scored
-  const candidates = await prisma.user.findMany({
-    where: {
-      id: { notIn: Array.from(busyUserIds) },
-    },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      bio: true,
-      skills: true,
-      timezone: true,
-      githubUrl: true,
-    },
-    take: 200, // sample pool for ranking
-  });
+  // Query candidate pool with database-level prioritization:
+  // Prioritize candidates with matching skills if requiredSkills are configured
+  let candidates = [];
+  if (team.requiredSkills && team.requiredSkills.length > 0) {
+    const matchingCandidates = await prisma.user.findMany({
+      where: {
+        id: { notIn: Array.from(busyUserIds) },
+        skills: { hasSome: team.requiredSkills },
+      },
+      select: {
+        id: true,
+        name: true,
+        bio: true,
+        skills: true,
+        timezone: true,
+        githubUrl: true,
+      },
+      take: 500,
+    });
 
-  // 3. Compute score for each candidate
+    const matchingIds = new Set(matchingCandidates.map((c) => c.id));
+    candidates = [...matchingCandidates];
+
+    // If matching pool is small, backfill with complementary candidates
+    if (candidates.length < 100) {
+      const remainingCandidates = await prisma.user.findMany({
+        where: {
+          id: { notIn: [...Array.from(busyUserIds), ...Array.from(matchingIds)] },
+        },
+        select: {
+          id: true,
+          name: true,
+          bio: true,
+          skills: true,
+          timezone: true,
+          githubUrl: true,
+        },
+        take: 100 - candidates.length,
+      });
+      candidates.push(...remainingCandidates);
+    }
+  } else {
+    // No explicit required skills: fetch up to 500 eligible candidates
+    candidates = await prisma.user.findMany({
+      where: {
+        id: { notIn: Array.from(busyUserIds) },
+      },
+      select: {
+        id: true,
+        name: true,
+        bio: true,
+        skills: true,
+        timezone: true,
+        githubUrl: true,
+      },
+      take: 500,
+    });
+  }
+
+  // 3. Compute score for each candidate (70% Skill, 30% Timezone)
   const scoredCandidates = candidates.map((candidate) => {
     const candidateSkillsRaw = candidate.skills || [];
     const candidateSkillsNorm = candidateSkillsRaw.map(normalizeSkill);
@@ -502,9 +595,15 @@ export const getTeamSuggestions = async (teamId, limit = 10) => {
       skillScore = Math.round(ratio * 70);
     }
 
-    // Timezone Score (30% weight)
-    const candidateOffset = getTimezoneOffsetMinutes(candidate.timezone || 'UTC');
+    // Timezone Score (30% weight) & Working Hour Overlap
+    const candidateTz = candidate.timezone || 'UTC';
+    const leaderTz = team.leader?.timezone || 'UTC';
+    const candidateOffset = getTimezoneOffsetMinutes(candidateTz);
     const hourDiff = Math.abs(candidateOffset - leaderOffset) / 60;
+
+    // Working-hour overlap percentage based on 9-hour workday
+    const overlapHours = Math.max(0, 9 - hourDiff);
+    const timezoneOverlapPercent = Math.round((overlapHours / 9) * 100);
 
     let tzScore = 5;
     if (hourDiff <= 1) tzScore = 30;
@@ -515,16 +614,15 @@ export const getTeamSuggestions = async (teamId, limit = 10) => {
 
     const totalScore = Math.min(100, Math.round(skillScore + tzScore));
 
-    // Generate clear human-readable explanation
+    // Phase 7: Clear human-readable explanation with explicit heuristic disclaimer
     const skillExplanation =
       teamRequiredSkills.length > 0
-        ? `Matches ${matchedSkills.length} of ${teamRequiredSkills.length} required skills (${matchedSkills.join(', ') || 'none'})`
-        : `Offers ${matchedSkills.length} complementary skills (${matchedSkills.slice(0, 3).join(', ') || 'general profile'})`;
+        ? matchedSkills.length > 0
+          ? `provides the matching skills (${matchedSkills.join(', ')})`
+          : `provides complementary skills (${candidateSkillsRaw.slice(0, 3).join(', ') || 'general profile'})`
+        : `offers complementary capabilities (${matchedSkills.slice(0, 3).join(', ') || 'general capabilities'})`;
 
-    const tzExplanation =
-      hourDiff === 0
-        ? 'Identical timezone with team leader'
-        : `${hourDiff.toFixed(1)}h difference from team leader (${candidate.timezone || 'UTC'} vs ${team.leader?.timezone || 'UTC'})`;
+    const explanationText = `Recommended because this candidate ${skillExplanation}, with ${timezoneOverlapPercent}% timezone overlap (${candidateTz} vs ${leaderTz}). Note: Heuristic compatibility estimate based on self-reported skills.`;
 
     return {
       user: candidate,
@@ -534,13 +632,14 @@ export const getTeamSuggestions = async (teamId, limit = 10) => {
         skillScore,
         timezoneScore: tzScore,
         totalScore,
+        timezoneOverlapPercent,
       },
       matchedSkills,
       hourDifference: hourDiff,
       explanation: {
-        text: `${skillExplanation}. ${tzExplanation}.`,
+        text: explanationText,
         matchingSkills: matchedSkills,
-        timezoneProximity: tzExplanation,
+        timezoneProximity: `${hourDiff.toFixed(1)}h difference (${timezoneOverlapPercent}% working overlap)`,
         skillExplanation,
       },
     };

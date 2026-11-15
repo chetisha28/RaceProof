@@ -88,5 +88,9 @@ export const invitesAPI = {
   accept: (token) => api.post(`/invites/${token}/accept`),
 };
 
+export const demoAPI = {
+  runConcurrencyBenchmark: () => api.post('/demo/concurrency-benchmark'),
+};
+
 export default api;
 

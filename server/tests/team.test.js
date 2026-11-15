@@ -251,8 +251,10 @@ describe('Team Creation & Discovery Suite', () => {
       });
     const teamId = teamRes.body.data.id;
 
-    // Request suggestions
-    const sugRes = await request(app).get(`/api/teams/${teamId}/suggestions?limit=5`);
+    // Request suggestions with authorization
+    const sugRes = await request(app)
+      .get(`/api/teams/${teamId}/suggestions?limit=5`)
+      .set('Authorization', `Bearer ${token1}`);
 
     expect(sugRes.status).toBe(200);
     expect(sugRes.body.success).toBe(true);
@@ -264,6 +266,13 @@ describe('Team Creation & Discovery Suite', () => {
     expect(firstSug.user.id).toBe(candidate1.id);
     expect(firstSug.matchScore).toBe(100); // 70% skill (100% of 70) + 30% timezone (UTC vs UTC = 100% of 30) = 100%
     expect(firstSug.explanation.matchingSkills).toEqual(expect.arrayContaining(['PostgreSQL', 'Docker']));
+    expect(firstSug.user.email).toBeUndefined(); // Privacy check: email not exposed
+  });
+
+  it('14d. should reject unauthenticated access to teammate suggestions with HTTP 401', async () => {
+    const res = await request(app).get('/api/teams/dummy-id/suggestions');
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('UNAUTHORIZED');
   });
 });
 

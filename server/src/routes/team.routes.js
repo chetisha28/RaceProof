@@ -6,6 +6,7 @@ import * as inviteController from '../controllers/invite.controller.js';
 import * as auditController from '../controllers/audit.controller.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.middleware.js';
 import { validateBody, validateQuery } from '../middleware/validate.middleware.js';
+import { teamCreateLimiter, joinRequestLimiter } from '../middleware/rateLimit.middleware.js';
 import {
   createTeamSchema,
   updateTeamSchema,
@@ -18,14 +19,14 @@ import { teamQuerySchema } from '../validators/query.validator.js';
 const router = Router();
 
 // Team Core Endpoints
-router.post('/', authenticateToken, validateBody(createTeamSchema), teamController.createTeam);
+router.post('/', authenticateToken, teamCreateLimiter, validateBody(createTeamSchema), teamController.createTeam);
 router.get('/', optionalAuth, validateQuery(teamQuerySchema), teamController.getTeams);
 router.get('/:id', optionalAuth, teamController.getTeam);
 router.patch('/:id', authenticateToken, validateBody(updateTeamSchema), teamController.updateTeam);
 router.delete('/:id', authenticateToken, teamController.disbandTeam);
 
 // Join Requests Sub-routes
-router.post('/:id/requests', authenticateToken, validateBody(joinRequestSchema), requestController.createRequest);
+router.post('/:id/requests', authenticateToken, joinRequestLimiter, validateBody(joinRequestSchema), requestController.createRequest);
 router.get('/:id/requests', authenticateToken, requestController.getTeamRequests);
 
 // Membership Sub-routes
@@ -40,8 +41,8 @@ router.post('/:id/invites', authenticateToken, validateBody(inviteSchema), invit
 // Audit Logs Sub-route
 router.get('/:id/audit-logs', optionalAuth, auditController.getAuditLogs);
 
-// Teammate Suggestions Sub-route (Task 5)
-router.get('/:id/suggestions', optionalAuth, teamController.getSuggestions);
+// Teammate Suggestions Sub-route (Task 5 - Authenticated only for privacy)
+router.get('/:id/suggestions', authenticateToken, teamController.getSuggestions);
 
 export default router;
 

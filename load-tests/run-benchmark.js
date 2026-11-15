@@ -23,8 +23,17 @@ async function runBenchmark() {
 
   try {
     // 1. Prepare Target Team with 1 remaining slot
-    const hackathon = await prisma.hackathon.findFirst();
-    if (!hackathon) throw new Error('No hackathon found. Run seed first.');
+    let hackathon = await prisma.hackathon.findFirst();
+    if (!hackathon) {
+      hackathon = await prisma.hackathon.create({
+        data: {
+          name: 'Benchmark Hackathon 2026',
+          description: 'Automated performance evaluation hackathon',
+          startDate: new Date(),
+          endDate: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+        },
+      });
+    }
 
     const defaultPasswordHash = await bcrypt.hash('Password123!', 6);
 

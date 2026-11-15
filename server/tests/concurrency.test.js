@@ -363,5 +363,118 @@ describe('CRITICAL: High-Concurrency Team Capacity Verification', () => {
     expect(members).toHaveLength(2);
     expect(members.filter((m) => m.userId === applicant.id)).toHaveLength(1);
   });
+
+  it('27. should serialize simultaneous team capacity reduction and join request acceptance without oversubscription', async () => {
+    console.log('\n--- 🚀 Starting Concurrent Capacity Reduction vs Membership Acceptance Test ---');
+
+    const hackathon = await prisma.hackathon.create({
+      data: {
+        name: 'Capacity Race Hackathon',
+        description: 'Testing capacity reduction concurrency race',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 86400000 * 2),
+      },
+    });
+
+    const defaultPasswordHash = await bcrypt.hash('Password123!', 6);
+
+    // Leader and 1 existing member (Initial count = 2, Max = 3 -> 1 slot remaining)
+    const leader = await prisma.user.create({
+      data: { name: 'Cap Leader', email: 'cap_leader@test.com', passwordHash: defaultPasswordHash },
+    });
+    const leaderLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'cap_leader@test.com', password: 'Password123!' });
+    const leaderToken = leaderLogin.body.data.token;
+
+    const initialMember = await prisma.user.create({
+      data: { name: 'Existing Member', email: 'cap_member@test.com', passwordHash: defaultPasswordHash },
+    });
+
+    const team = await prisma.team.create({
+      data: {
+        name: 'Capacity Fortress',
+        description: 'Testing capacity reduction race',
+        hackathonId: hackathon.id,
+        leaderId: leader.id,
+        minSize: 2,
+        maxSize: 3,
+        status: 'ACTIVE',
+      },
+    });
+
+    await prisma.teamMember.createMany({
+      data: [
+        { teamId: team.id, hackathonId: hackathon.id, userId: leader.id, role: 'LEADER' },
+        { teamId: team.id, hackathonId: hackathon.id, userId: initialMember.id, role: 'MEMBER' },
+      ],
+    });
+
+    // Applicant with pending join request
+    const applicant = await prisma.user.create({
+      data: { name: 'Cap Applicant', email: 'cap_app@test.com', passwordHash: defaultPasswordHash },
+    });
+
+    const joinRequest = await prisma.joinRequest.create({
+      data: {
+        teamId: team.id,
+        userId: applicant.id,
+        status: 'PENDING',
+        message: 'Trying to fill final slot while leader reduces capacity',
+      },
+    });
+
+    // Fire SIMULTANEOUS requests:
+    // 1. Leader tries to REDUCE maxSize from 3 down to 2 (which equals current member count)
+    // 2. Leader accepts the applicant's join request (which would increase members to 3)
+    const [reduceRes, acceptRes] = await Promise.all([
+      request(app)
+        .patch(`/api/teams/${team.id}`)
+        .set('Authorization', `Bearer ${leaderToken}`)
+        .send({ maxSize: 2 }),
+      request(app)
+        .patch(`/api/requests/${joinRequest.id}/accept`)
+        .set('Authorization', `Bearer ${leaderToken}`),
+    ]);
+
+    // Inspect database state after concurrency resolution
+    const finalTeam = await prisma.team.findUnique({ where: { id: team.id } });
+    const finalMembers = await prisma.teamMember.findMany({ where: { teamId: team.id } });
+
+    // CRITICAL INVARIANT: The team must NEVER exceed its configured maximum capacity!
+    expect(finalMembers.length).toBeLessThanOrEqual(finalTeam.maxSize);
+
+    // If capacity reduction won first, maxSize is 2 and accept failed with 409
+    // If accept won first, members is 3 and capacity reduction was rejected with 400
+    if (reduceRes.status === 200) {
+      expect(finalTeam.maxSize).toBe(2);
+      expect(acceptRes.status).toBe(409); // Rejected because team is now full at 2
+      expect(finalMembers).toHaveLength(2);
+    } else {
+      expect(acceptRes.status).toBe(200);
+      expect(reduceRes.status).toBe(400); // Rejected because team already has 3 members
+      expect(finalTeam.maxSize).toBe(3);
+      expect(finalMembers).toHaveLength(3);
+    }
+
+    // Verify audit log exists
+    const auditLogs = await prisma.auditLog.findMany({ where: { teamId: team.id } });
+    expect(auditLogs.length).toBeGreaterThanOrEqual(1);
+    console.log('✅ Capacity update concurrency race safely serialized via row locks!');
+  });
+
+  it('28. should execute authentic live benchmark endpoint and verify all 50-request invariants', async () => {
+    const res = await request(app).post('/api/demo/concurrency-benchmark');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const data = res.body.data;
+    expect(data.totalRequests).toBe(50);
+    expect(data.acceptedCount).toBe(1);
+    expect(data.conflictCount).toBe(49);
+    expect(data.finalPostgresMemberCount).toBe(4);
+    expect(data.oversubscription).toBe(0);
+    expect(data.invariantsVerified).toBe(true);
+  });
 });
 
