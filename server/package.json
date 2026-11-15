@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "type": "module",
   "scripts": {
+    "build": "prisma generate",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "prisma:generate": "prisma generate",
@@ -25,11 +26,11 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
+    "prisma": "^6.4.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.9",
-    "prisma": "^6.4.1",
     "supertest": "^7.0.0",
     "vitest": "^3.0.5"
   }
