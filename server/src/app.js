@@ -13,16 +13,16 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
-];
+].filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl) or in allowed list
+      // Allow requests with no origin (like mobile apps, curl, or supertest) or in allowed list
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(null, true); // Permissive in dev/test for ease of evaluation
+        callback(new Error(`Origin '${origin}' not allowed by CORS`));
       }
     },
     credentials: true,

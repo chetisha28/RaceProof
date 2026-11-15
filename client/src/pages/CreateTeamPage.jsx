@@ -18,7 +18,9 @@ export const CreateTeamPage = () => {
     name: '',
     description: '',
     hackathonId: '',
+    minSize: 2,
     maxSize: 4,
+    requiredSkills: '',
   });
 
   useEffect(() => {
@@ -40,9 +42,17 @@ export const CreateTeamPage = () => {
 
     setLoading(true);
     try {
+      const requiredSkills = formData.requiredSkills
+        ? formData.requiredSkills.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+
       const res = await teamsAPI.create({
-        ...formData,
+        name: formData.name,
+        description: formData.description,
+        hackathonId: formData.hackathonId,
+        minSize: parseInt(formData.minSize, 10),
         maxSize: parseInt(formData.maxSize, 10),
+        requiredSkills,
       });
 
       success(`Team "${res.data.data.name}" created! You are now the team leader.`);
@@ -133,28 +143,70 @@ export const CreateTeamPage = () => {
             />
           </div>
 
-          {/* Capacity Slider */}
+          {/* Required Skills */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                Maximum Team Capacity (2 to 10 members)
-              </label>
-              <span className="text-base font-extrabold text-blue-600 px-2.5 py-0.5 rounded-lg bg-blue-50 border border-blue-200">
-                {formData.maxSize} Members
-              </span>
-            </div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+              Required Skills (Comma-separated)
+            </label>
             <input
-              type="range"
-              min={2}
-              max={10}
-              value={formData.maxSize}
-              onChange={(e) => setFormData({ ...formData, maxSize: e.target.value })}
-              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+              type="text"
+              value={formData.requiredSkills}
+              onChange={(e) => setFormData({ ...formData, requiredSkills: e.target.value })}
+              placeholder="e.g. React, Node.js, PostgreSQL, TypeScript"
+              className="w-full px-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <div className="flex justify-between text-[11px] text-slate-400 mt-1">
-              <span>Min: 2 members</span>
-              <span>Default: 4 members</span>
-              <span>Max: 10 members</span>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Used to score and recommend matching teammates based on complementary skills.
+            </p>
+          </div>
+
+          {/* Capacity Settings: minSize and maxSize */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Min Team Size
+                </label>
+                <span className="text-sm font-bold text-slate-700 px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                  {formData.minSize} Members
+                </span>
+              </div>
+              <input
+                type="range"
+                min={2}
+                max={Math.min(10, parseInt(formData.maxSize, 10) || 10)}
+                value={formData.minSize}
+                onChange={(e) => setFormData({ ...formData, minSize: Math.min(parseInt(e.target.value, 10), parseInt(formData.maxSize, 10)) })}
+                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+              />
+              <span className="text-[11px] text-slate-400">Target minimum for readiness</span>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Max Team Capacity
+                </label>
+                <span className="text-sm font-bold text-blue-600 px-2 py-0.5 rounded bg-blue-50 border border-blue-200">
+                  {formData.maxSize} Members
+                </span>
+              </div>
+              <input
+                type="range"
+                min={Math.max(2, parseInt(formData.minSize, 10) || 2)}
+                max={10}
+                value={formData.maxSize}
+                onChange={(e) => {
+                  const newMax = parseInt(e.target.value, 10);
+                  setFormData({
+                    ...formData,
+                    maxSize: newMax,
+                    minSize: Math.min(parseInt(formData.minSize, 10), newMax),
+                  });
+                }}
+                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+              />
+              <span className="text-[11px] text-slate-400">Hard limit enforced by locking</span>
             </div>
           </div>
 

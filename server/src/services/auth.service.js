@@ -3,7 +3,7 @@ import { hashPassword, comparePassword } from '../utils/crypto.js';
 import { signToken } from '../utils/jwt.js';
 import { AppError } from '../middleware/error.middleware.js';
 
-export const registerUser = async ({ name, email, password, bio, skills, githubUrl }) => {
+export const registerUser = async ({ name, email, password, bio, skills, timezone, githubUrl }) => {
   const normalizedEmail = email.toLowerCase().trim();
 
   const existing = await prisma.user.findUnique({
@@ -23,6 +23,7 @@ export const registerUser = async ({ name, email, password, bio, skills, githubU
       passwordHash,
       bio: bio || null,
       skills: skills || [],
+      timezone: timezone || 'UTC',
       githubUrl: githubUrl || null,
     },
     select: {
@@ -31,6 +32,7 @@ export const registerUser = async ({ name, email, password, bio, skills, githubU
       email: true,
       bio: true,
       skills: true,
+      timezone: true,
       githubUrl: true,
       createdAt: true,
     },
@@ -66,6 +68,7 @@ export const loginUser = async ({ email, password }) => {
       email: user.email,
       bio: user.bio,
       skills: user.skills,
+      timezone: user.timezone,
       githubUrl: user.githubUrl,
       createdAt: user.createdAt,
     },
@@ -82,6 +85,7 @@ export const getCurrentUserProfile = async (userId) => {
       email: true,
       bio: true,
       skills: true,
+      timezone: true,
       githubUrl: true,
       createdAt: true,
       memberships: {
@@ -128,6 +132,7 @@ export const updateUserProfile = async (userId, data) => {
       email: true,
       bio: true,
       skills: true,
+      timezone: true,
       githubUrl: true,
       updatedAt: true,
     },
@@ -135,4 +140,3 @@ export const updateUserProfile = async (userId, data) => {
 
   return user;
 };
-

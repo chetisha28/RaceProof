@@ -3,7 +3,63 @@ import { AppError } from '../middleware/error.middleware.js';
 import { createAuditLog } from './audit.service.js';
 import { eventEmitter, DOMAIN_EVENTS } from '../events/eventEmitter.js';
 
-export const createTeam = async ({ name, description, hackathonId, maxSize = 4, leaderId }) => {
+// High-performance in-memory cache for discovery board with event-driven invalidation
+const teamDiscoveryCache = new Map();
+const inFlightQueries = new Map();
+const CACHE_TTL_MS = 3000;
+
+export const invalidateTeamCache = () => {
+  teamDiscoveryCache.clear();
+  inFlightQueries.clear();
+};
+
+// Wire cache invalidation on team mutation domain events
+eventEmitter.on(DOMAIN_EVENTS.TEAM_CREATED, invalidateTeamCache);
+eventEmitter.on(DOMAIN_EVENTS.TEAM_UPDATED, invalidateTeamCache);
+eventEmitter.on(DOMAIN_EVENTS.TEAM_DISBANDED, invalidateTeamCache);
+eventEmitter.on(DOMAIN_EVENTS.MEMBER_JOINED, invalidateTeamCache);
+eventEmitter.on(DOMAIN_EVENTS.MEMBER_LEFT, invalidateTeamCache);
+
+/**
+ * Normalizes skill string for accurate case-insensitive and symbol-agnostic matching
+ */
+export const normalizeSkill = (skill) => {
+  return String(skill || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[\s\-_.]/g, '');
+};
+
+/**
+ * Computes timezone offset in minutes relative to UTC
+ */
+export const getTimezoneOffsetMinutes = (timeZone) => {
+  try {
+    const now = new Date();
+    const tzDate = new Date(now.toLocaleString('en-US', { timeZone }));
+    const utcDate = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+    return Math.round((tzDate.getTime() - utcDate.getTime()) / 60000);
+  } catch (e) {
+    const match = String(timeZone || '').match(/([+-])(\d{1,2})(?::?(\d{2}))?/);
+    if (match) {
+      const sign = match[1] === '-' ? -1 : 1;
+      const hours = parseInt(match[2], 10);
+      const mins = match[3] ? parseInt(match[3], 10) : 0;
+      return sign * (hours * 60 + mins);
+    }
+    return 0; // Default UTC
+  }
+};
+
+export const createTeam = async ({
+  name,
+  description,
+  hackathonId,
+  minSize = 2,
+  maxSize = 4,
+  requiredSkills = [],
+  leaderId,
+}) => {
   // 1. Verify hackathon exists
   const hackathon = await prisma.hackathon.findUnique({
     where: { id: hackathonId },
@@ -13,7 +69,16 @@ export const createTeam = async ({ name, description, hackathonId, maxSize = 4, 
     throw new AppError('Hackathon not found', 404, 'HACKATHON_NOT_FOUND');
   }
 
-  // 2. Verify creator is not already in a team in this hackathon
+  // 2. Validate minSize <= maxSize bounds
+  if (minSize > maxSize) {
+    throw new AppError('Minimum team size cannot exceed maximum capacity', 400, 'INVALID_CAPACITY_BOUNDS');
+  }
+
+  if (minSize < 2 || maxSize > 10) {
+    throw new AppError('Team capacity must be configured between 2 and 10 members', 400, 'CAPACITY_OUT_OF_BOUNDS');
+  }
+
+  // 3. Verify creator is not already in a team in this hackathon
   const existingMembership = await prisma.teamMember.findUnique({
     where: {
       unique_user_per_hackathon: {
@@ -32,7 +97,7 @@ export const createTeam = async ({ name, description, hackathonId, maxSize = 4, 
     );
   }
 
-  // 3. Atomically create Team and TeamMember in a transaction
+  // 4. Atomically create Team and TeamMember in a transaction
   const result = await prisma.$transaction(async (tx) => {
     const team = await tx.team.create({
       data: {
@@ -40,7 +105,9 @@ export const createTeam = async ({ name, description, hackathonId, maxSize = 4, 
         description: description.trim(),
         hackathonId,
         leaderId,
+        minSize,
         maxSize,
+        requiredSkills: requiredSkills || [],
         status: 'ACTIVE',
       },
     });
@@ -54,7 +121,7 @@ export const createTeam = async ({ name, description, hackathonId, maxSize = 4, 
       },
       include: {
         user: {
-          select: { id: true, name: true, email: true, skills: true },
+          select: { id: true, name: true, email: true, skills: true, timezone: true },
         },
       },
     });
@@ -63,7 +130,7 @@ export const createTeam = async ({ name, description, hackathonId, maxSize = 4, 
       actorId: leaderId,
       teamId: team.id,
       action: 'TEAM_CREATED',
-      metadata: { name: team.name, maxSize: team.maxSize, hackathonId },
+      metadata: { name: team.name, minSize: team.minSize, maxSize: team.maxSize, hackathonId },
     });
 
     return { team, member };
@@ -80,97 +147,128 @@ export const createTeam = async ({ name, description, hackathonId, maxSize = 4, 
 };
 
 export const getTeams = async ({ hackathonId, search, skill, status = 'ACTIVE', page = 1, limit = 12 }) => {
-  const where = {};
-
-  if (hackathonId) {
-    where.hackathonId = hackathonId;
+  const cacheKey = JSON.stringify({ hackathonId, search, skill, status, page, limit });
+  const cached = teamDiscoveryCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.data;
   }
 
-  if (status && status !== 'ALL') {
-    where.status = status;
-  } else if (!status || status === 'ALL') {
-    where.status = { not: 'DISBANDED' };
+  // SingleFlight: If an identical query is currently in-flight, coalesce onto it
+  let inFlight = inFlightQueries.get(cacheKey);
+  if (inFlight) {
+    return await inFlight;
   }
 
-  if (search) {
-    where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { description: { contains: search, mode: 'insensitive' } },
-    ];
-  }
+  const queryExecution = (async () => {
+    const where = {};
 
-  if (skill) {
-    where.members = {
-      some: {
-        user: {
-          skills: {
+    if (hackathonId) {
+      where.hackathonId = hackathonId;
+    }
+
+    if (status && status !== 'ALL') {
+      where.status = status;
+    } else if (!status || status === 'ALL') {
+      where.status = { not: 'DISBANDED' };
+    }
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (skill) {
+      where.OR = [
+        {
+          members: {
+            some: {
+              user: {
+                skills: {
+                  has: skill,
+                },
+              },
+            },
+          },
+        },
+        {
+          requiredSkills: {
             has: skill,
           },
         },
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [total, teams] = await Promise.all([
+      prisma.team.count({ where }),
+      prisma.team.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          hackathon: {
+            select: { id: true, name: true },
+          },
+          leader: {
+            select: { id: true, name: true, email: true, timezone: true },
+          },
+          members: {
+            select: {
+              id: true,
+              role: true,
+              user: {
+                select: { id: true, name: true, skills: true },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const formattedTeams = teams.map((team) => {
+      const memberCount = team.members.length;
+      const availableSeats = Math.max(0, team.maxSize - memberCount);
+      const teamSkills = Array.from(new Set(team.members.flatMap((m) => m.user.skills || [])));
+
+      return {
+        ...team,
+        memberCount,
+        availableSeats,
+        isFull: memberCount >= team.maxSize,
+        meetsMinimum: memberCount >= team.minSize,
+        teamSkills,
+      };
+    });
+
+    const responsePayload = {
+      teams: formattedTeams,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total,
       },
     };
+
+    teamDiscoveryCache.set(cacheKey, {
+      data: responsePayload,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+
+    return responsePayload;
+  })();
+
+  inFlightQueries.set(cacheKey, queryExecution);
+  try {
+    return await queryExecution;
+  } finally {
+    inFlightQueries.delete(cacheKey);
   }
-
-  const skip = (page - 1) * limit;
-
-  const [total, teams] = await Promise.all([
-    prisma.team.count({ where }),
-    prisma.team.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        hackathon: {
-          select: { id: true, name: true },
-        },
-        leader: {
-          select: { id: true, name: true, email: true },
-        },
-        members: {
-          include: {
-            user: {
-              select: { id: true, name: true, skills: true, githubUrl: true },
-            },
-          },
-        },
-        _count: {
-          select: {
-            members: true,
-            joinRequests: {
-              where: { status: 'PENDING' },
-            },
-          },
-        },
-      },
-    }),
-  ]);
-
-  const formattedTeams = teams.map((team) => {
-    const memberCount = team.members.length;
-    const availableSeats = Math.max(0, team.maxSize - memberCount);
-    // Aggregate distinct skills in the team
-    const teamSkills = Array.from(new Set(team.members.flatMap((m) => m.user.skills || [])));
-
-    return {
-      ...team,
-      memberCount,
-      availableSeats,
-      isFull: memberCount >= team.maxSize,
-      teamSkills,
-    };
-  });
-
-  return {
-    teams: formattedTeams,
-    pagination: {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-      hasMore: page * limit < total,
-    },
-  };
 };
 
 export const getTeamById = async (teamId, requestingUserId = null) => {
@@ -181,13 +279,13 @@ export const getTeamById = async (teamId, requestingUserId = null) => {
         select: { id: true, name: true, startDate: true, endDate: true },
       },
       leader: {
-        select: { id: true, name: true, email: true, bio: true, skills: true, githubUrl: true },
+        select: { id: true, name: true, email: true, bio: true, skills: true, timezone: true, githubUrl: true },
       },
       members: {
         orderBy: { joinedAt: 'asc' },
         include: {
           user: {
-            select: { id: true, name: true, email: true, bio: true, skills: true, githubUrl: true },
+            select: { id: true, name: true, email: true, bio: true, skills: true, timezone: true, githubUrl: true },
           },
         },
       },
@@ -218,7 +316,7 @@ export const getTeamById = async (teamId, requestingUserId = null) => {
       orderBy: { createdAt: 'desc' },
       include: {
         user: {
-          select: { id: true, name: true, email: true, bio: true, skills: true, githubUrl: true },
+          select: { id: true, name: true, email: true, bio: true, skills: true, timezone: true, githubUrl: true },
         },
       },
     });
@@ -229,6 +327,7 @@ export const getTeamById = async (teamId, requestingUserId = null) => {
     memberCount,
     availableSeats,
     isFull: memberCount >= team.maxSize,
+    meetsMinimum: memberCount >= team.minSize,
     isLeader,
     isMember,
     pendingRequests,
@@ -249,6 +348,13 @@ export const updateTeam = async (teamId, userId, data) => {
     throw new AppError('Only the team leader can update team settings', 403, 'FORBIDDEN_NOT_LEADER');
   }
 
+  const newMinSize = data.minSize !== undefined ? data.minSize : team.minSize;
+  const newMaxSize = data.maxSize !== undefined ? data.maxSize : team.maxSize;
+
+  if (newMinSize > newMaxSize) {
+    throw new AppError('minSize cannot exceed maxSize', 400, 'INVALID_CAPACITY_BOUNDS');
+  }
+
   if (data.maxSize !== undefined && data.maxSize < team.members.length) {
     throw new AppError(
       `Cannot reduce maximum size to ${data.maxSize} because the team already has ${team.members.length} members`,
@@ -262,7 +368,9 @@ export const updateTeam = async (teamId, userId, data) => {
     data: {
       ...(data.name && { name: data.name.trim() }),
       ...(data.description && { description: data.description.trim() }),
+      ...(data.minSize !== undefined && { minSize: data.minSize }),
       ...(data.maxSize !== undefined && { maxSize: data.maxSize }),
+      ...(data.requiredSkills !== undefined && { requiredSkills: data.requiredSkills }),
     },
   });
 
@@ -315,3 +423,131 @@ export const disbandTeam = async (teamId, userId) => {
   return { message: 'Team successfully disbanded' };
 };
 
+/**
+ * Teammate Recommendation Engine
+ * Recommends available hackathon participants based on:
+ * - 70% Skill Compatibility (matching required skills or complementary skill overlap)
+ * - 30% Timezone Compatibility (proximity of active working hours)
+ */
+export const getTeamSuggestions = async (teamId, limit = 10) => {
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    include: {
+      leader: { select: { id: true, timezone: true } },
+      members: {
+        include: {
+          user: { select: { id: true, skills: true, timezone: true } },
+        },
+      },
+    },
+  });
+
+  if (!team) {
+    throw new AppError('Team not found', 404, 'TEAM_NOT_FOUND');
+  }
+
+  // 1. Identify existing team skills and required skills
+  const existingMemberIds = new Set(team.members.map((m) => m.userId));
+  const teamRequiredSkills = (team.requiredSkills || []).map(normalizeSkill);
+  const teamCurrentSkills = new Set(team.members.flatMap((m) => (m.user.skills || []).map(normalizeSkill)));
+
+  // Target skills: either explicit requiredSkills, or complementary core skills not present
+  const targetSkills = teamRequiredSkills.length > 0 ? teamRequiredSkills : Array.from(teamCurrentSkills);
+
+  const leaderOffset = getTimezoneOffsetMinutes(team.leader?.timezone || 'UTC');
+
+  // 2. Query candidates: participants NOT in any team in this hackathon
+  const busyUserMemberships = await prisma.teamMember.findMany({
+    where: { hackathonId: team.hackathonId },
+    select: { userId: true },
+  });
+  const busyUserIds = new Set(busyUserMemberships.map((m) => m.userId));
+
+  // Also exclude users with pending join requests to this team? They can still be recommended or scored
+  const candidates = await prisma.user.findMany({
+    where: {
+      id: { notIn: Array.from(busyUserIds) },
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      bio: true,
+      skills: true,
+      timezone: true,
+      githubUrl: true,
+    },
+    take: 200, // sample pool for ranking
+  });
+
+  // 3. Compute score for each candidate
+  const scoredCandidates = candidates.map((candidate) => {
+    const candidateSkillsRaw = candidate.skills || [];
+    const candidateSkillsNorm = candidateSkillsRaw.map(normalizeSkill);
+
+    // Skill Score (70% weight)
+    let matchedSkills = [];
+    let skillScore = 0;
+
+    if (teamRequiredSkills.length > 0) {
+      // Direct match against required skills
+      matchedSkills = candidateSkillsRaw.filter((s) => teamRequiredSkills.includes(normalizeSkill(s)));
+      const ratio = matchedSkills.length / teamRequiredSkills.length;
+      skillScore = Math.min(70, Math.round(ratio * 70));
+    } else {
+      // Complementary match: skills that bring new capabilities to the team
+      const newSkills = candidateSkillsRaw.filter((s) => !teamCurrentSkills.has(normalizeSkill(s)));
+      matchedSkills = newSkills;
+      const ratio = Math.min(1.0, candidateSkillsRaw.length > 0 ? candidateSkillsRaw.length / 4 : 0.2);
+      skillScore = Math.round(ratio * 70);
+    }
+
+    // Timezone Score (30% weight)
+    const candidateOffset = getTimezoneOffsetMinutes(candidate.timezone || 'UTC');
+    const hourDiff = Math.abs(candidateOffset - leaderOffset) / 60;
+
+    let tzScore = 5;
+    if (hourDiff <= 1) tzScore = 30;
+    else if (hourDiff <= 3) tzScore = 24;
+    else if (hourDiff <= 6) tzScore = 18;
+    else if (hourDiff <= 9) tzScore = 12;
+    else if (hourDiff <= 12) tzScore = 8;
+
+    const totalScore = Math.min(100, Math.round(skillScore + tzScore));
+
+    // Generate clear human-readable explanation
+    const skillExplanation =
+      teamRequiredSkills.length > 0
+        ? `Matches ${matchedSkills.length} of ${teamRequiredSkills.length} required skills (${matchedSkills.join(', ') || 'none'})`
+        : `Offers ${matchedSkills.length} complementary skills (${matchedSkills.slice(0, 3).join(', ') || 'general profile'})`;
+
+    const tzExplanation =
+      hourDiff === 0
+        ? 'Identical timezone with team leader'
+        : `${hourDiff.toFixed(1)}h difference from team leader (${candidate.timezone || 'UTC'} vs ${team.leader?.timezone || 'UTC'})`;
+
+    return {
+      user: candidate,
+      score: totalScore,
+      matchScore: totalScore,
+      breakdown: {
+        skillScore,
+        timezoneScore: tzScore,
+        totalScore,
+      },
+      matchedSkills,
+      hourDifference: hourDiff,
+      explanation: {
+        text: `${skillExplanation}. ${tzExplanation}.`,
+        matchingSkills: matchedSkills,
+        timezoneProximity: tzExplanation,
+        skillExplanation,
+      },
+    };
+  });
+
+  // Sort by score descending
+  scoredCandidates.sort((a, b) => b.score - a.score);
+
+  return scoredCandidates.slice(0, limit);
+};

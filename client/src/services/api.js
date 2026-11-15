@@ -61,6 +61,7 @@ export const teamsAPI = {
   transferLeadership: (teamId, newLeaderId) => api.post(`/teams/${teamId}/transfer-leadership`, { newLeaderId }),
   getAuditLogs: (teamId) => api.get(`/teams/${teamId}/audit-logs`),
   createInvite: (teamId, expiresInHours) => api.post(`/teams/${teamId}/invites`, { expiresInHours }),
+  getSuggestions: (teamId, limit = 10) => api.get(`/teams/${teamId}/suggestions`, { params: { limit } }),
 };
 
 export const requestsAPI = {

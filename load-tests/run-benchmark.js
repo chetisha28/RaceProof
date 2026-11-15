@@ -78,22 +78,28 @@ async function runBenchmark() {
       req.end();
     });
 
-    // 2. BENCHMARK A: Concurrent Team Discovery & Team Details (50 VUs, 150 requests)
-    console.log('\n📊 Stage 1: Concurrent Read Throughput (Discovery & Details, 50 VUs)...');
+    // 2. BENCHMARK A: 100 Concurrent Users Exercising Team Discovery / Board Endpoint
+    console.log('\n📊 Stage 1: 100 Concurrent Users on Team Discovery Board (/api/teams?page=1&limit=10)...');
     const readLatencies = [];
     let readSuccessCount = 0;
+    let readErrorCount = 0;
+    const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 100 });
 
-    const readRequests = Array.from({ length: 150 }, (_, i) => {
-      const endpoint = i % 2 === 0 ? `${baseUrl}/teams?limit=10` : `${baseUrl}/teams/${team.id}`;
+    const readRequests = Array.from({ length: 100 }, (_, i) => {
+      const endpoint = `${baseUrl}/teams?page=1&limit=10`;
       return new Promise((resolve) => {
         const start = Date.now();
-        http.get(endpoint, (res) => {
+        http.get(endpoint, { agent: httpAgent }, (res) => {
           let data = '';
           res.on('data', (c) => (data += c));
           res.on('end', () => {
             const dur = Date.now() - start;
             readLatencies.push(dur);
-            if (res.statusCode === 200) readSuccessCount++;
+            if (res.statusCode === 200) {
+              readSuccessCount++;
+            } else {
+              readErrorCount++;
+            }
             resolve(res.statusCode);
           });
         });
@@ -102,11 +108,17 @@ async function runBenchmark() {
 
     await Promise.all(readRequests);
 
-    console.log(`  - Total Read Requests:    150`);
-    console.log(`  - Successful (200 OK):    ${readSuccessCount}`);
-    console.log(`  - Read Latency p50:       ${getPercentile(readLatencies, 50)} ms`);
-    console.log(`  - Read Latency p95:       ${getPercentile(readLatencies, 95)} ms`);
-    console.log(`  - Read Latency p99:       ${getPercentile(readLatencies, 99)} ms`);
+    const readP50 = getPercentile(readLatencies, 50);
+    const readP95 = getPercentile(readLatencies, 95);
+    const readP99 = getPercentile(readLatencies, 99);
+
+    console.log(`  - Total Concurrent Requests: 100`);
+    console.log(`  - Successful (200 OK):       ${readSuccessCount}`);
+    console.log(`  - HTTP Errors:               ${readErrorCount}`);
+    console.log(`  - Board Discovery Latency p50: ${readP50} ms`);
+    console.log(`  - Board Discovery Latency p95: ${readP95} ms`);
+    console.log(`  - Board Discovery Latency p99: ${readP99} ms`);
+    console.log(`  - PS1 Target Check (p95 < 200ms): ${readP95 < 200 ? '✅ PASSED' : '⚠️ MISSED'} (${readP95} ms)`);
 
     // 3. BENCHMARK B: Concurrent Join Acceptance (50 Simultaneous VUs on 1 available slot)
     console.log('\n⚡ Stage 2: 50 Concurrent Acceptance Requests on 1 Slot (High Contention)...');

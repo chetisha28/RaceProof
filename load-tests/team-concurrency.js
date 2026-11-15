@@ -12,32 +12,32 @@ const successCounter = new Counter('success_join_count');
 
 export const options = {
   scenarios: {
-    // Scenario 1: High-concurrency discovery & detail read load
-    read_traffic: {
+    // Scenario 1: High-concurrency discovery & board read load (100 concurrent users)
+    board_discovery_traffic: {
       executor: 'ramping-vus',
-      startVUs: 5,
+      startVUs: 10,
       stages: [
-        { duration: '10s', target: 50 },
-        { duration: '20s', target: 50 },
-        { duration: '10s', target: 0 },
+        { duration: '10s', target: 100 }, // Ramp to 100 concurrent users
+        { duration: '20s', target: 100 }, // Sustain 100 concurrent users
+        { duration: '10s', target: 0 },   // Ramp down
       ],
       gracefulRampDown: '5s',
       exec: 'readTraffic',
     },
-    // Scenario 2: High-contention join request submissions
-    join_contention: {
+    // Scenario 2: 50-request last-seat concurrency scenario
+    last_seat_contention: {
       executor: 'per-vu-iterations',
       vus: 50,
       iterations: 1,
       startTime: '5s',
-      maxDuration: '20s',
+      maxDuration: '25s',
       exec: 'joinContention',
     },
   },
   thresholds: {
-    http_req_failed: ['rate<0.05'], // Max 5% unexpected server failure (409 is expected for full teams)
-    http_req_duration: ['p(95)<500', 'p(99)<1000'],
-    team_discovery_duration: ['p(95)<300'],
+    http_req_failed: ['rate<0.05'], // Max 5% unexpected HTTP 5xx errors
+    http_req_duration: ['p(95)<250', 'p(99)<500'],
+    team_discovery_duration: ['p(95)<200'], // PS1 Challenge Target: board p95 < 200ms
   },
 };
 

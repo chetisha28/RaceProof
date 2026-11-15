@@ -145,5 +145,20 @@ describe('Authentication & Authorization Suite', () => {
     expect(res.status).toBe(401);
     expect(res.body.code).toBe('UNAUTHORIZED');
   });
+
+  it('8b. should enforce rate limiting on sensitive auth endpoints when enabled', async () => {
+    // loginLimiter max is 30 requests per 15 mins
+    const requests = Array.from({ length: 32 }, () =>
+      request(app)
+        .post('/api/auth/login')
+        .set('x-test-ratelimit', 'true')
+        .send({ email: 'ratelimit@example.com', password: 'Password123!' })
+    );
+
+    const responses = await Promise.all(requests);
+    const rateLimited = responses.filter((r) => r.status === 429);
+    expect(rateLimited.length).toBeGreaterThanOrEqual(1);
+    expect(rateLimited[0].body.code).toBe('LOGIN_RATE_LIMIT_EXCEEDED');
+  });
 });
 

@@ -40,5 +40,8 @@ router.post('/:id/invites', authenticateToken, validateBody(inviteSchema), invit
 // Audit Logs Sub-route
 router.get('/:id/audit-logs', optionalAuth, auditController.getAuditLogs);
 
+// Teammate Suggestions Sub-route (Task 5)
+router.get('/:id/suggestions', optionalAuth, teamController.getSuggestions);
+
 export default router;
 

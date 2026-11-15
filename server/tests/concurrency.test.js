@@ -202,5 +202,166 @@ describe('CRITICAL: High-Concurrency Team Capacity Verification', () => {
 
     console.log('✅ ALL 8 CONCURRENCY INVARIANTS VERIFIED! Zero oversubscription.');
   });
+
+  it('25. should guarantee that exactly 1 of 2 concurrent users succeeds when using the same single-use invitation', async () => {
+    console.log('\n--- 🚀 Starting Concurrent Invitation Token Acceptance Test ---');
+
+    // 1. Create Hackathon & Team with capacity 4 (leader + 2 slots)
+    const hackathon = await prisma.hackathon.create({
+      data: {
+        name: 'Invite Race Hackathon',
+        description: 'Testing single-use invite concurrency',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 86400000 * 2),
+      },
+    });
+
+    const defaultPasswordHash = await bcrypt.hash('Password123!', 6);
+
+    const leader = await prisma.user.create({
+      data: { name: 'Invite Leader', email: 'inv_leader@test.com', passwordHash: defaultPasswordHash },
+    });
+
+    const team = await prisma.team.create({
+      data: {
+        name: 'Invite Test Team',
+        description: 'Testing concurrent invite acceptance',
+        hackathonId: hackathon.id,
+        leaderId: leader.id,
+        maxSize: 4,
+      },
+    });
+
+    await prisma.teamMember.create({
+      data: { teamId: team.id, hackathonId: hackathon.id, userId: leader.id, role: 'LEADER' },
+    });
+
+    // 2. Generate a single-use invite
+    const leaderLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'inv_leader@test.com', password: 'Password123!' });
+    const leaderToken = leaderLogin.body.data.token;
+
+    const inviteRes = await request(app)
+      .post(`/api/teams/${team.id}/invites`)
+      .set('Authorization', `Bearer ${leaderToken}`)
+      .send({ expiresInHours: 24 });
+
+    const rawToken = inviteRes.body.data.token;
+    expect(rawToken).toBeDefined();
+
+    // 3. Create two different applicant users
+    const userA = await prisma.user.create({
+      data: { name: 'User A', email: 'user_a@test.com', passwordHash: defaultPasswordHash },
+    });
+    const userALogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'user_a@test.com', password: 'Password123!' });
+    const tokenA = userALogin.body.data.token;
+
+    const userB = await prisma.user.create({
+      data: { name: 'User B', email: 'user_b@test.com', passwordHash: defaultPasswordHash },
+    });
+    const userBLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'user_b@test.com', password: 'Password123!' });
+    const tokenB = userBLogin.body.data.token;
+
+    // 4. Fire simultaneous acceptance requests with the SAME token
+    const [resA, resB] = await Promise.all([
+      request(app).post(`/api/invites/${rawToken}/accept`).set('Authorization', `Bearer ${tokenA}`),
+      request(app).post(`/api/invites/${rawToken}/accept`).set('Authorization', `Bearer ${tokenB}`),
+    ]);
+
+    const statuses = [resA.status, resB.status].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const winner = resA.status === 200 ? resA : resB;
+    const loser = resA.status === 409 ? resA : resB;
+
+    expect(winner.body.success).toBe(true);
+    expect(loser.body.code).toBe('INVITE_ALREADY_USED');
+
+    // Verify DB state: total members is 2 (leader + exactly one invitee)
+    const finalMembers = await prisma.teamMember.findMany({ where: { teamId: team.id } });
+    expect(finalMembers).toHaveLength(2);
+
+    // Verify invite usedAt is set
+    const inviteRecord = await prisma.invite.findFirst({ where: { teamId: team.id } });
+    expect(inviteRecord.usedAt).not.toBeNull();
+  });
+
+  it('26. should handle idempotent join-request acceptance safely on concurrent retries of the same request', async () => {
+    console.log('\n--- 🚀 Starting Idempotent Join Request Acceptance Test ---');
+
+    const hackathon = await prisma.hackathon.create({
+      data: {
+        name: 'Idempotency Hackathon',
+        description: 'Testing idempotent request handling',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 86400000 * 2),
+      },
+    });
+
+    const defaultPasswordHash = await bcrypt.hash('Password123!', 6);
+
+    const leader = await prisma.user.create({
+      data: { name: 'Idempotent Leader', email: 'idem_leader@test.com', passwordHash: defaultPasswordHash },
+    });
+    const leaderLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'idem_leader@test.com', password: 'Password123!' });
+    const leaderToken = leaderLogin.body.data.token;
+
+    const team = await prisma.team.create({
+      data: {
+        name: 'Idempotent Team',
+        description: 'Testing idempotent accept retries',
+        hackathonId: hackathon.id,
+        leaderId: leader.id,
+        maxSize: 4,
+      },
+    });
+    await prisma.teamMember.create({
+      data: { teamId: team.id, hackathonId: hackathon.id, userId: leader.id, role: 'LEADER' },
+    });
+
+    const applicant = await prisma.user.create({
+      data: { name: 'Idempotent Applicant', email: 'idem_app@test.com', passwordHash: defaultPasswordHash },
+    });
+
+    const joinRequest = await prisma.joinRequest.create({
+      data: {
+        teamId: team.id,
+        userId: applicant.id,
+        status: 'PENDING',
+        message: 'Testing idempotency',
+      },
+    });
+
+    // Fire 5 concurrent requests to accept the EXACT SAME join request ID (simulating network retries)
+    const retryPromises = Array.from({ length: 5 }, () =>
+      request(app)
+        .patch(`/api/requests/${joinRequest.id}/accept`)
+        .set('Authorization', `Bearer ${leaderToken}`)
+    );
+
+    const responses = await Promise.all(retryPromises);
+
+    // All retries must return HTTP 200 (or at least no 500 errors)
+    responses.forEach((res) => {
+      expect([200]).toContain(res.status);
+      expect(res.body.success).toBe(true);
+    });
+
+    // At least one response should indicate idempotency flag
+    const idempotentFlags = responses.map((r) => r.body.data?.idempotent);
+    expect(idempotentFlags.filter(Boolean).length).toBeGreaterThanOrEqual(1);
+
+    // Verify DB state: exactly 2 members in team, no duplicate membership rows
+    const members = await prisma.teamMember.findMany({ where: { teamId: team.id } });
+    expect(members).toHaveLength(2);
+    expect(members.filter((m) => m.userId === applicant.id)).toHaveLength(1);
+  });
 });
 

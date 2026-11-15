@@ -15,6 +15,8 @@
     "test": "npm run test --workspace=server",
     "test:concurrency": "npm run test:concurrency --workspace=server",
     "seed": "npm run seed --workspace=server",
+    "seed:large": "npm run seed:large --workspace=server",
+    "benchmark": "node load-tests/run-benchmark.js",
     "prisma:migrate": "npm run prisma:migrate --workspace=server",
     "prisma:generate": "npm run prisma:generate --workspace=server"
   },

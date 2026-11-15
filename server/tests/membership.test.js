@@ -162,24 +162,81 @@ describe('Membership, Join Requests & Invitations Suite', () => {
     expect(members).toHaveLength(1);
   });
 
-  it('20. should prevent leader from leaving team if other members exist without transferring leadership', async () => {
-    // Add applicant as member
-    const joinReq = await request(app)
+  it('20. should automatically promote oldest remaining member when leader leaves and update audit logs', async () => {
+    // Add memberUser as member (joined earlier)
+    const joinReq1 = await request(app)
       .post(`/api/teams/${team.id}/requests`)
-      .set('Authorization', `Bearer ${applicantToken}`)
-      .send({ message: 'Join me' });
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ message: 'Join me first' });
 
     await request(app)
-      .patch(`/api/requests/${joinReq.body.data.id}/accept`)
+      .patch(`/api/requests/${joinReq1.body.data.id}/accept`)
       .set('Authorization', `Bearer ${leaderToken}`);
 
-    // Leader tries to leave directly
+    // Wait 20ms and add applicant as member (joined later)
+    await new Promise((r) => setTimeout(r, 20));
+    const joinReq2 = await request(app)
+      .post(`/api/teams/${team.id}/requests`)
+      .set('Authorization', `Bearer ${applicantToken}`)
+      .send({ message: 'Join me second' });
+
+    await request(app)
+      .patch(`/api/requests/${joinReq2.body.data.id}/accept`)
+      .set('Authorization', `Bearer ${leaderToken}`);
+
+    // Leader leaves directly without manual transfer
     const leaveRes = await request(app)
       .post(`/api/teams/${team.id}/leave`)
       .set('Authorization', `Bearer ${leaderToken}`);
 
-    expect(leaveRes.status).toBe(400);
-    expect(leaveRes.body.code).toBe('LEADER_CANNOT_LEAVE_WITH_MEMBERS');
+    expect(leaveRes.status).toBe(200);
+    expect(leaveRes.body.data.leadershipTransferred).toBe(true);
+    expect(leaveRes.body.data.newLeaderId).toBe(memberUser.id);
+
+    // Verify DB state
+    const updatedTeam = await prisma.team.findUnique({ where: { id: team.id } });
+    expect(updatedTeam.leaderId).toBe(memberUser.id);
+
+    const newLeaderMember = await prisma.teamMember.findFirst({
+      where: { teamId: team.id, userId: memberUser.id },
+    });
+    expect(newLeaderMember.role).toBe('LEADER');
+
+    // Verify old leader is no longer a member
+    const oldLeaderMembership = await prisma.teamMember.findFirst({
+      where: { teamId: team.id, userId: leader.id },
+    });
+    expect(oldLeaderMembership).toBeNull();
+
+    // Verify audit logs for transfer and departure
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { teamId: team.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const actions = auditLogs.map((l) => l.action);
+    expect(actions).toContain('LEADERSHIP_TRANSFERRED');
+    expect(actions).toContain('MEMBER_LEFT');
+  });
+
+  it('20b. should delete team and preserve audit record when the last remaining member leaves', async () => {
+    // team has only 1 member (leader)
+    const leaveRes = await request(app)
+      .post(`/api/teams/${team.id}/leave`)
+      .set('Authorization', `Bearer ${leaderToken}`);
+
+    expect(leaveRes.status).toBe(200);
+    expect(leaveRes.body.data.deleted).toBe(true);
+
+    // Verify team is deleted in DB
+    const deletedTeam = await prisma.team.findUnique({ where: { id: team.id } });
+    expect(deletedTeam).toBeNull();
+
+    // Verify TEAM_DELETED audit log is preserved
+    const deleteAudit = await prisma.auditLog.findFirst({
+      where: { action: 'TEAM_DELETED', actorId: leader.id },
+    });
+    expect(deleteAudit).toBeDefined();
+    expect(deleteAudit.metadata).toMatchObject({ teamName: team.name });
   });
 
   it('21. should allow leadership transfer to an active team member', async () => {

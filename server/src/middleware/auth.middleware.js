@@ -30,6 +30,7 @@ export const authenticateToken = async (req, res, next) => {
         email: true,
         bio: true,
         skills: true,
+        timezone: true,
         githubUrl: true,
         createdAt: true,
       },

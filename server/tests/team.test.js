@@ -195,5 +195,75 @@ describe('Team Creation & Discovery Suite', () => {
 
     expect(newTeamRes.status).toBe(201);
   });
+
+  it('14b. should reject team creation when minSize > maxSize with HTTP 400', async () => {
+    const res = await request(app)
+      .post('/api/teams')
+      .set('Authorization', `Bearer ${token1}`)
+      .send({
+        name: 'Invalid MinMax Team',
+        description: 'minSize cannot exceed maxSize',
+        hackathonId: hackathon.id,
+        minSize: 5,
+        maxSize: 3,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('14c. should return ranked teammate suggestions based on skills and timezone', async () => {
+    // Register candidate 1: matching skill + same timezone (UTC)
+    const regCandidate1 = await request(app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Perfect Match Candidate',
+        email: 'perfect@test.com',
+        password: 'Password123!',
+        skills: ['PostgreSQL', 'Docker'],
+        timezone: 'UTC',
+      });
+    const candidate1 = regCandidate1.body.data.user;
+
+    // Register candidate 2: no matching skills, different timezone
+    const regCandidate2 = await request(app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Distant Candidate',
+        email: 'distant@test.com',
+        password: 'Password123!',
+        skills: ['Photoshop'],
+        timezone: 'Asia/Tokyo',
+      });
+    const candidate2 = regCandidate2.body.data.user;
+
+    // User 1 creates team with requiredSkills: ['PostgreSQL', 'Docker']
+    const teamRes = await request(app)
+      .post('/api/teams')
+      .set('Authorization', `Bearer ${token1}`)
+      .send({
+        name: 'Database Specialists',
+        description: 'Focus on high performance persistence',
+        hackathonId: hackathon.id,
+        minSize: 2,
+        maxSize: 4,
+        requiredSkills: ['PostgreSQL', 'Docker'],
+      });
+    const teamId = teamRes.body.data.id;
+
+    // Request suggestions
+    const sugRes = await request(app).get(`/api/teams/${teamId}/suggestions?limit=5`);
+
+    expect(sugRes.status).toBe(200);
+    expect(sugRes.body.success).toBe(true);
+    const suggestions = sugRes.body.data;
+    expect(suggestions.length).toBeGreaterThanOrEqual(2);
+
+    // Candidate 1 should be ranked higher than Candidate 2
+    const firstSug = suggestions[0];
+    expect(firstSug.user.id).toBe(candidate1.id);
+    expect(firstSug.matchScore).toBe(100); // 70% skill (100% of 70) + 30% timezone (UTC vs UTC = 100% of 30) = 100%
+    expect(firstSug.explanation.matchingSkills).toEqual(expect.arrayContaining(['PostgreSQL', 'Docker']));
+  });
 });
 

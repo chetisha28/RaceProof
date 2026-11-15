@@ -12,6 +12,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:reset": "prisma migrate reset --force",
     "seed": "node prisma/seed.js",
+    "seed:large": "node prisma/seed-large.js",
     "test": "vitest run --testTimeout=30000",
     "test:watch": "vitest",
     "test:concurrency": "vitest run tests/concurrency.test.js --testTimeout=60000"

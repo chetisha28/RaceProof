@@ -20,6 +20,8 @@ import {
   ArrowLeft,
   Shield,
   FileText,
+  Sparkles,
+  Globe,
 } from 'lucide-react';
 import { Card } from '../components/Card.jsx';
 import { Button } from '../components/Button.jsx';
@@ -36,6 +38,8 @@ export const TeamDetailsPage = () => {
   const [team, setTeam] = useState(null);
   const [loading, setLoading] = useState(true);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   // Modals state
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
@@ -56,6 +60,11 @@ export const TeamDetailsPage = () => {
 
       setTeam(teamRes.data.data);
       setAuditLogs(auditRes.data.data || []);
+
+      // Fetch teammate suggestions
+      teamsAPI.getSuggestions(id, 6)
+        .then((sugRes) => setSuggestions(sugRes.data.data || []))
+        .catch(() => setSuggestions([]));
     } catch (err) {
       error(err.response?.data?.message || 'Failed to load team details.');
     } finally {
@@ -277,6 +286,24 @@ export const TeamDetailsPage = () => {
               <p className="text-sm text-slate-700 leading-relaxed">{team.description}</p>
             </div>
 
+            {team.requiredSkills && team.requiredSkills.length > 0 && (
+              <div>
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Required Teammate Skills
+                </h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {team.requiredSkills.map((skill) => (
+                    <span
+                      key={skill}
+                      className="px-2.5 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium"
+                    >
+                      {skill}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Invariant badge */}
             <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 flex items-start gap-3">
               <Shield className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
@@ -295,7 +322,7 @@ export const TeamDetailsPage = () => {
                 Capacity Status
               </span>
               <span className="text-xs font-bold text-slate-900">
-                {team.members.length} / {team.maxSize}
+                {team.members.length} / {team.maxSize} (Min: {team.minSize || 2})
               </span>
             </div>
             <div className="w-full bg-slate-200 rounded-full h-2.5">
@@ -308,11 +335,16 @@ export const TeamDetailsPage = () => {
                 }}
               ></div>
             </div>
-            <p className="text-xs text-slate-500">
-              {availableSlots > 0
-                ? `${availableSlots} ${availableSlots === 1 ? 'seat' : 'seats'} currently open.`
-                : 'Team has reached its maximum capacity.'}
-            </p>
+            <div className="flex justify-between items-center text-[11px] text-slate-500">
+              <span>
+                {availableSlots > 0
+                  ? `${availableSlots} ${availableSlots === 1 ? 'seat' : 'seats'} open.`
+                  : 'Team is at max capacity.'}
+              </span>
+              <span className={team.members.length >= (team.minSize || 2) ? 'text-emerald-600 font-semibold' : 'text-amber-600 font-semibold'}>
+                {team.members.length >= (team.minSize || 2) ? '✓ Meets min size' : `Needs ${(team.minSize || 2) - team.members.length} more`}
+              </span>
+            </div>
           </div>
         </div>
       </Card>
@@ -380,6 +412,93 @@ export const TeamDetailsPage = () => {
                 No pending join requests for this team.
               </p>
             )}
+          </div>
+        </Card>
+      )}
+
+      {/* Teammate Recommendations Section (PS1 Scoring: 70% Skills + 30% Timezone) */}
+      {!isFull && suggestions.length > 0 && (
+        <Card className="p-6 border-purple-200 shadow-sm bg-gradient-to-br from-white to-purple-50/30">
+          <div className="flex items-center justify-between pb-4 border-b border-purple-100">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="w-5 h-5 text-purple-600" />
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Recommended Teammates ({suggestions.length})
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Ranked by 70% skill complementarity & 30% timezone proximity
+                </p>
+              </div>
+            </div>
+            {isLeader && (
+              <Button
+                variant="outline"
+                size="sm"
+                icon={Share2}
+                onClick={handleGenerateInvite}
+              >
+                Invite via Link
+              </Button>
+            )}
+          </div>
+
+          <div className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {suggestions.map((sug) => (
+              <div
+                key={sug.user.id}
+                className="p-3.5 rounded-xl border border-purple-100 bg-white/80 hover:bg-white shadow-xs space-y-2 transition-all"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-purple-600 text-white flex items-center justify-center font-bold text-xs">
+                      {sug.user.name[0]?.toUpperCase()}
+                    </div>
+                    <div>
+                      <span className="font-bold text-sm text-slate-900">{sug.user.name}</span>
+                      <div className="flex items-center gap-1 text-[11px] text-slate-500">
+                        <Globe className="w-3 h-3 text-slate-400" />
+                        <span>{sug.user.timezone || 'UTC'}</span>
+                        <span className="text-slate-300">•</span>
+                        <span>{sug.explanation.timezoneProximity}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
+                      {sug.matchScore}% Match
+                    </span>
+                  </div>
+                </div>
+
+                {sug.user.bio && (
+                  <p className="text-xs text-slate-600 line-clamp-1 italic">
+                    "{sug.user.bio}"
+                  </p>
+                )}
+
+                <div className="flex flex-wrap gap-1 pt-0.5">
+                  {sug.user.skills?.map((s) => {
+                    const isMatched = sug.explanation.matchingSkills?.some(
+                      (m) => m.toLowerCase() === s.toLowerCase()
+                    );
+                    return (
+                      <span
+                        key={s}
+                        className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                          isMatched
+                            ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {s} {isMatched && '★'}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </Card>
       )}

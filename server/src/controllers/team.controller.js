@@ -50,3 +50,12 @@ export const disbandTeam = async (req, res, next) => {
   }
 };
 
+export const getSuggestions = async (req, res, next) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 10;
+    const suggestions = await teamService.getTeamSuggestions(req.params.id, limit);
+    return successResponse(res, suggestions, 'Teammate suggestions retrieved');
+  } catch (err) {
+    next(err);
+  }
+};

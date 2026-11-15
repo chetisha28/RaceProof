@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Starting RaceProof database seeding...');
+  console.log('🌱 Starting RaceProof database seeding...');
 
   // 1. Clean existing records in correct foreign key order
   await prisma.auditLog.deleteMany();
@@ -20,7 +20,7 @@ async function main() {
   // 2. Hash default password for demo accounts
   const defaultPasswordHash = await bcrypt.hash('Password123!', 10);
 
-  // 3. Create Sample Users
+  // 3. Create Sample Users with timezone and skills
   const usersData = [
     {
       name: 'Alice Vance',
@@ -28,6 +28,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'Distributed systems architect & PostgreSQL enthusiast. Passionate about transactional integrity.',
       skills: ['Node.js', 'PostgreSQL', 'Docker', 'Prisma', 'Redis'],
+      timezone: 'America/New_York',
       githubUrl: 'https://github.com/alice-raceproof',
     },
     {
@@ -36,6 +37,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'Full-stack engineer with React & TypeScript focus. Loves building slick dashboard UIs.',
       skills: ['React', 'TypeScript', 'Tailwind CSS', 'Vite', 'GraphQL'],
+      timezone: 'America/Chicago',
       githubUrl: 'https://github.com/bob-frontend',
     },
     {
@@ -44,6 +46,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'DevOps engineer and database administrator. Specializes in ACID guarantees and high throughput.',
       skills: ['PostgreSQL', 'Linux', 'Kubernetes', 'CI/CD', 'Bash'],
+      timezone: 'America/Los_Angeles',
       githubUrl: 'https://github.com/charlie-devops',
     },
     {
@@ -52,6 +55,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'Senior backend developer. Exploring real-time event streaming and SSE architectures.',
       skills: ['Node.js', 'Express', 'Python', 'Kafka', 'System Design'],
+      timezone: 'Europe/London',
       githubUrl: 'https://github.com/diana-backend',
     },
     {
@@ -60,6 +64,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'Frontend developer and accessibility advocate. Clean responsive layouts only.',
       skills: ['React', 'JavaScript', 'CSS3', 'Web Accessibility', 'Jest'],
+      timezone: 'America/New_York',
       githubUrl: 'https://github.com/ethan-ui',
     },
     {
@@ -68,6 +73,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'Security researcher and backend engineer. Enforces secure cookies, RBAC, and input sanitization.',
       skills: ['Cybersecurity', 'JWT', 'OAuth', 'Node.js', 'PostgreSQL'],
+      timezone: 'America/New_York',
       githubUrl: 'https://github.com/fiona-sec',
     },
     {
@@ -76,6 +82,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'Data engineer and analytics hacker. Specializes in aggregation pipelines and concurrency testing.',
       skills: ['Python', 'SQL', 'Data Modeling', 'k6', 'Docker'],
+      timezone: 'America/Detroit',
       githubUrl: 'https://github.com/george-data',
     },
     {
@@ -84,6 +91,7 @@ async function main() {
       passwordHash: defaultPasswordHash,
       bio: 'Cloud native specialist with AWS & GCP expertise. Team formation coordinator.',
       skills: ['Go', 'Docker', 'AWS', 'PostgreSQL', 'Microservices'],
+      timezone: 'UTC',
       githubUrl: 'https://github.com/hannah-cloud',
     },
   ];
@@ -110,7 +118,7 @@ async function main() {
       endDate,
     },
   });
-  console.log(`Created Hackathon: "${hackathon.name}"`);
+  console.log(`🏆 Created Hackathon: "${hackathon.name}"`);
 
   // 5. Create Team 1: "Team Distributed" (3 members, 1 slot left - Critical Test Team!)
   const team1 = await prisma.team.create({
@@ -120,7 +128,9 @@ async function main() {
         'Building a zero-conflict distributed ledger and high-throughput locking prototype. Looking for 1 final backend/DB engineer!',
       hackathonId: hackathon.id,
       leaderId: createdUsers[0].id, // Alice
+      minSize: 2,
       maxSize: 4,
+      requiredSkills: ['PostgreSQL', 'Docker', 'System Design'],
       status: 'ACTIVE',
     },
   });
@@ -154,10 +164,10 @@ async function main() {
       actorId: createdUsers[0].id,
       teamId: team1.id,
       action: 'TEAM_CREATED',
-      metadata: { name: team1.name, maxSize: 4 },
+      metadata: { name: team1.name, minSize: 2, maxSize: 4 },
     },
   });
-  console.log('Created Team 1: "Team Distributed" (3/4 members, 1 seat open)');
+  console.log('⚡ Created Team 1: "Team Distributed" (3/4 members, 1 seat open)');
 
   // 6. Create Team 2: "Team Quantum" (2 members, 2 slots left)
   const team2 = await prisma.team.create({
@@ -167,7 +177,9 @@ async function main() {
         'Developing real-time collaborative state synchronization with operational transforms. Seeking React and Node experts.',
       hackathonId: hackathon.id,
       leaderId: createdUsers[3].id, // Diana
+      minSize: 2,
       maxSize: 4,
+      requiredSkills: ['React', 'TypeScript', 'Node.js'],
       status: 'ACTIVE',
     },
   });
@@ -194,10 +206,10 @@ async function main() {
       actorId: createdUsers[3].id,
       teamId: team2.id,
       action: 'TEAM_CREATED',
-      metadata: { name: team2.name, maxSize: 4 },
+      metadata: { name: team2.name, minSize: 2, maxSize: 4 },
     },
   });
-  console.log('Created Team 2: "Team Quantum" (2/4 members, 2 seats open)');
+  console.log('⚡ Created Team 2: "Team Quantum" (2/4 members, 2 seats open)');
 
   // 7. Create Pending Join Requests on Team 1 (from Fiona and George)
   await prisma.joinRequest.create({
@@ -224,7 +236,7 @@ async function main() {
 
 main()
   .catch((e) => {
-    console.error('Seeding failed:', e);
+    console.error('❌ Seeding failed:', e);
     process.exit(1);
   })
   .finally(async () => {

@@ -1,0 +1,62 @@
+name: RaceProof CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-and-build:
+    name: Build, Migrate & Run Automated Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password123
+          POSTGRES_DB: raceproof_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      PORT: 5000
+      JWT_SECRET: super-secret-ci-testing-jwt-key-2026
+      DATABASE_URL: "postgresql://postgres:password123@localhost:5432/raceproof_test?schema=public"
+      TEST_DATABASE_URL: "postgresql://postgres:password123@localhost:5432/raceproof_test?schema=public"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Validate Prisma Schema
+        run: npx prisma validate --schema=server/prisma/schema.prisma
+
+      - name: Generate Prisma Client
+        run: npx prisma generate --schema=server/prisma/schema.prisma
+
+      - name: Apply Database Migrations
+        run: npx prisma migrate deploy --schema=server/prisma/schema.prisma
+
+      - name: Run Backend Integration & Concurrency Tests
+        run: npm test
+
+      - name: Build Frontend Application
+        run: npm run build

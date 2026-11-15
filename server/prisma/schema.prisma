@@ -32,6 +32,7 @@ model User {
   passwordHash String
   bio          String?       @db.Text
   skills       String[]      @default([])
+  timezone     String        @default("UTC")
   githubUrl    String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -58,15 +59,17 @@ model Hackathon {
 }
 
 model Team {
-  id          String        @id @default(uuid())
-  name        String
-  description String        @db.Text
-  hackathonId String
-  leaderId    String
-  maxSize     Int           @default(4)
-  status      TeamStatus    @default(ACTIVE)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id             String        @id @default(uuid())
+  name           String
+  description    String        @db.Text
+  hackathonId    String
+  leaderId       String
+  minSize        Int           @default(2)
+  maxSize        Int           @default(4)
+  requiredSkills String[]      @default([])
+  status         TeamStatus    @default(ACTIVE)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   hackathon   Hackathon     @relation(fields: [hackathonId], references: [id], onDelete: Cascade)
   leader      User          @relation("TeamLeader", fields: [leaderId], references: [id], onDelete: Restrict)
@@ -78,6 +81,8 @@ model Team {
   @@index([hackathonId])
   @@index([leaderId])
   @@index([status])
+  @@index([createdAt])
+  @@index([hackathonId, status, createdAt])
 }
 
 model TeamMember {
@@ -140,7 +145,7 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
-  team      Team?    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team      Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
 
   @@index([teamId])
   @@index([actorId])
