@@ -8,22 +8,49 @@ import { env } from './config/env.js';
 const app = express();
 
 // Security and CORS middleware
-const allowedOrigins = [
-  env.CLIENT_URL,
+const configuredOrigins = (env.CLIENT_URL || '')
+  .split(',')
+  .map((url) => url.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+const defaultOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
-].filter(Boolean);
+];
+
+const allowedOrigins = new Set([...configuredOrigins, ...defaultOrigins]);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or supertest) or in allowed list
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`Origin '${origin}' not allowed by CORS`));
+      // Allow requests with no origin (like mobile apps, curl, or supertest)
+      if (!origin) {
+        return callback(null, true);
       }
+
+      const normalizedOrigin = origin.replace(/\/$/, '');
+
+      // Check configured origins
+      if (allowedOrigins.has(normalizedOrigin)) {
+        return callback(null, true);
+      }
+
+      try {
+        const parsed = new URL(origin);
+        // Allow Vercel production and preview deployments
+        if (parsed.hostname.endsWith('.vercel.app')) {
+          return callback(null, true);
+        }
+        // Allow localhost dev servers
+        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+          return callback(null, true);
+        }
+      } catch {
+        // malformed origin
+      }
+
+      return callback(new Error(`Origin '${origin}' not allowed by CORS`));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],

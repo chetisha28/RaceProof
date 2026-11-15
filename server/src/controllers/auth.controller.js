@@ -2,10 +2,12 @@ import * as authService from '../services/auth.service.js';
 import { successResponse } from '../utils/response.js';
 import { env } from '../config/env.js';
 
+const isProduction = env.NODE_ENV === 'production';
+
 const cookieOptions = {
   httpOnly: true,
-  secure: env.NODE_ENV === 'production',
-  sameSite: 'lax',
+  secure: isProduction,
+  sameSite: isProduction ? 'none' : 'lax',
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
 
@@ -30,7 +32,11 @@ export const login = async (req, res, next) => {
 };
 
 export const logout = async (req, res) => {
-  res.clearCookie('token');
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+  });
   return successResponse(res, null, 'Logged out successfully');
 };
 
